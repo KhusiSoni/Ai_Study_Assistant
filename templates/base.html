@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}AI Study Assistant{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <nav class="nav">
+        <div class="container">
+            <a href="/" class="nav-brand">AI Study Assistant</a>
+            <span class="nav-tag">Context-Aware Doubt Solver</span>
+        </div>
+    </nav>
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+    <footer class="footer">
+        <div class="container">
+            <p>AI Study Assistant &mdash; Upload your notes or PDFs and ask questions grounded in your own material. Powered by RAG.</p>
+            <p style="margin-top: 4px; font-size: 0.8rem;">Created by <strong>Sohan</strong></p>
+        </div>
+    </footer>
+</body>
+</html>

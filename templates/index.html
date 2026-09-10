@@ -1,0 +1,427 @@
+{% extends "base.html" %}
+{% block title %}AI Study Assistant — Ask Your Notes{% endblock %}
+{% block content %}
+
+<div class="layout">
+    <div class="layout-sidebar">
+        <div class="card">
+            <h2>📚 Documents</h2>
+            <p style="font-size: 0.85rem; color: #8b949e; margin-bottom: 16px;">Upload PDF, DOCX, or TXT files</p>
+            <div class="upload-zone" id="uploadZone">
+                <div class="upload-zone-icon">+</div>
+                <p>Drop files or click to browse</p>
+            </div>
+            <input type="file" id="fileInput" accept=".pdf,.docx,.txt" multiple style="display:none;">
+            <div id="docList" class="doc-list"></div>
+            <div class="btn-group" style="margin-top: 12px;">
+                <button class="btn btn-secondary btn-sm" id="clearAllBtn">Clear All</button>
+            </div>
+        </div>
+        <div class="card">
+            <h2>⚙️ About</h2>
+            <div class="features">
+                <div class="feature"><strong>Semantic chunking</strong><br>Paragraph-aware document splitting</div>
+                <div class="feature"><strong>Hybrid retrieval</strong><br>TF-IDF + keyword boosting</div>
+                <div class="feature"><strong>Inline citations</strong><br>Answers reference source chunks</div>
+                <div class="feature"><strong>Streaming answers</strong><br>Real-time token generation</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="layout-main">
+        <div class="card" id="chatCard">
+            <div class="chat-header">
+                <h2>💬 Ask Your Material</h2>
+                <span id="docCountBadge" class="badge">No docs loaded</span>
+            </div>
+
+            <div id="chatMessages" class="chat-messages">
+                <div class="empty-chat" id="emptyChat">
+                    <div class="empty-icon">📖</div>
+                    <p class="empty-title">Upload your study material to get started</p>
+                    <p class="empty-sub">Drop a PDF, DOCX, or TXT file in the sidebar. I'll index it and answer questions grounded entirely in your content.</p>
+                </div>
+            </div>
+
+            <div class="chat-footer">
+                <div class="chat-input-row">
+                    <input type="text" id="questionInput" placeholder="Ask a question about your study material..." disabled autocomplete="off">
+                    <button class="btn" id="askBtn" disabled>
+                        <span class="btn-label">Ask</span>
+                        <span class="btn-shortcut">↵</span>
+                    </button>
+                </div>
+                <div class="chat-tools">
+                    <button class="btn-text" id="clearChatBtn">Clear chat</button>
+                    <span id="chatInfo" class="chat-info"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    const uploadZone = document.getElementById('uploadZone');
+    const fileInput = document.getElementById('fileInput');
+    const docList = document.getElementById('docList');
+    const chatMessages = document.getElementById('chatMessages');
+    const emptyChat = document.getElementById('emptyChat');
+    const questionInput = document.getElementById('questionInput');
+    const askBtn = document.getElementById('askBtn');
+    const clearChatBtn = document.getElementById('clearChatBtn');
+    const clearAllBtn = document.getElementById('clearAllBtn');
+    const docCountBadge = document.getElementById('docCountBadge');
+
+    let docs = [];
+    let chatHistory = loadChatHistory();
+
+    // ── Init ────────────────────────────────────────────────
+
+    loadSession();
+
+    function loadSession() {
+        fetch('/api/session')
+            .then(r => r.json())
+            .then(data => {
+                docs = data.documents || [];
+                renderDocList();
+                updateUIState();
+                if (chatHistory.length === 0 && docs.length > 0) {
+                    addSystemMessage(`✅ **${docs.length} document(s)** loaded. Ask me anything about your study material!`);
+                }
+                renderChatHistory();
+            });
+    }
+
+    // ── Upload ──────────────────────────────────────────────
+
+    uploadZone.addEventListener('click', () => fileInput.click());
+
+    uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+    uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+    uploadZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadZone.classList.remove('dragover');
+        if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+    });
+
+    fileInput.addEventListener('change', () => {
+        if (fileInput.files.length) handleFiles(fileInput.files);
+        fileInput.value = '';
+    });
+
+    function handleFiles(files) {
+        for (const file of files) {
+            uploadFile(file);
+        }
+    }
+
+    function uploadFile(file) {
+        const validExt = ['.pdf', '.docx', '.txt'];
+        const ext = '.' + file.name.split('.').pop().toLowerCase();
+        if (!validExt.includes(ext)) {
+            addSystemMessage(`⚠️ Skipped "${file.name}" — unsupported format. Use PDF, DOCX, or TXT.`);
+            return;
+        }
+
+        const card = addDocCard(file.name, 'Uploading...', true);
+        const formData = new FormData();
+        formData.append('file', file);
+
+        fetch('/api/upload', { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    card.remove();
+                    addSystemMessage(`⚠️ Upload failed: ${data.error}`);
+                    return;
+                }
+                docs = data.documents || [];
+                renderDocList();
+                updateUIState();
+                const info = data.info;
+                addSystemMessage(`✅ **${file.name}** indexed — ${info.chunks} chunks, ${info.char_count.toLocaleString()} chars`);
+            })
+            .catch(err => {
+                card.remove();
+                addSystemMessage(`⚠️ Upload error: ${err.message}`);
+            });
+    }
+
+    // ── Document Manager ────────────────────────────────────
+
+    function renderDocList() {
+        docList.innerHTML = '';
+        if (!docs.length) {
+            docList.innerHTML = '<p style="color: #8b949e; font-size: 0.85rem; text-align: center; padding: 16px 0;">No documents uploaded yet</p>';
+            return;
+        }
+        docs.forEach(d => {
+            const div = document.createElement('div');
+            div.className = 'doc-card';
+            div.innerHTML = `
+                <div class="doc-card-info">
+                    <div class="doc-card-name">${escapeHtml(d.display_name || d.filepath)}</div>
+                    <div class="doc-card-meta">${d.chunks} chunks · ${d.char_count.toLocaleString()} chars</div>
+                </div>
+                <button class="doc-card-delete" data-doc-id="${d.doc_id}" title="Remove">✕</button>
+            `;
+            div.querySelector('.doc-card-delete').addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteDoc(d.doc_id);
+            });
+            docList.appendChild(div);
+        });
+    }
+
+    function addDocCard(name, status, isLoading) {
+        const div = document.createElement('div');
+        div.className = 'doc-card';
+        div.innerHTML = `
+            <div class="doc-card-info">
+                <div class="doc-card-name">${escapeHtml(name)}</div>
+                <div class="doc-card-meta">${status}</div>
+            </div>
+            ${isLoading ? '<span class="spinner-sm"></span>' : ''}
+        `;
+        docList.prepend(div);
+        return div;
+    }
+
+    function deleteDoc(docId) {
+        fetch(`/api/documents/${docId}`, { method: 'DELETE' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) return;
+                docs = data.documents || [];
+                renderDocList();
+                updateUIState();
+                addSystemMessage(`🗑️ Document removed`);
+            });
+    }
+
+    clearAllBtn.addEventListener('click', () => {
+        if (!docs.length) return;
+        fetch('/api/clear', { method: 'POST' })
+            .then(r => r.json())
+            .then(() => {
+                docs = [];
+                renderDocList();
+                updateUIState();
+                addSystemMessage('🗑️ All documents cleared');
+            });
+    });
+
+    // ── UI State ────────────────────────────────────────────
+
+    function updateUIState() {
+        const hasDocs = docs.length > 0;
+        questionInput.disabled = !hasDocs;
+        askBtn.disabled = !hasDocs;
+        docCountBadge.textContent = hasDocs ? `${docs.length} doc(s) loaded` : 'No docs loaded';
+        docCountBadge.className = 'badge ' + (hasDocs ? 'badge-success' : '');
+    }
+
+    // ── Chat ────────────────────────────────────────────────
+
+    function askQuestion() {
+        const q = questionInput.value.trim();
+        if (!q) return;
+        questionInput.value = '';
+
+        addUserMessage(q);
+        const loadingId = showTyping();
+
+        const body = JSON.stringify({
+            question: q,
+            history: chatHistory.slice(-6),
+        });
+
+        fetch('/api/ask', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+        })
+            .then(r => r.json())
+            .then(data => {
+                hideTyping(loadingId);
+                if (data.empty) {
+                    addAssistantMessage(data.answer, null, null, false);
+                    return;
+                }
+                if (data.error) {
+                    addAssistantMessage('Error: ' + data.error, null, null, false);
+                    return;
+                }
+                addAssistantMessage(data.answer, data.sources, data.chunks, true);
+                chatHistory.push({ question: q, answer: data.answer });
+                saveChatHistory();
+            })
+            .catch(err => {
+                hideTyping(loadingId);
+                addAssistantMessage('Network error: ' + err.message, null, null, false);
+            });
+    }
+
+    askBtn.addEventListener('click', askQuestion);
+    questionInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            askQuestion();
+        }
+    });
+
+    clearChatBtn.addEventListener('click', () => {
+        chatHistory = [];
+        saveChatHistory();
+        chatMessages.innerHTML = '';
+        chatMessages.appendChild(emptyChat);
+        emptyChat.style.display = 'block';
+    });
+
+    // ── Render Helpers ──────────────────────────────────────
+
+    function addUserMessage(text) {
+        emptyChat.style.display = 'none';
+        const div = document.createElement('div');
+        div.className = 'msg msg-user';
+        div.innerHTML = `<div class="msg-content">${escapeHtml(text)}</div>`;
+        chatMessages.appendChild(div);
+        scrollBottom();
+        return div;
+    }
+
+    function addAssistantMessage(text, sources, chunks, hasCitations) {
+        emptyChat.style.display = 'none';
+        const div = document.createElement('div');
+        div.className = 'msg msg-assistant';
+
+        let html = `<div class="msg-content">${renderMarkdown(text)}</div>`;
+
+        if (sources && sources.length) {
+            html += `<div class="msg-sources">📁 ${sources.map(s => `<span class="source-badge">${escapeHtml(s.display_name || s.filepath)}</span>`).join('')}</div>`;
+        }
+
+        if (chunks && chunks.length) {
+            const toggleId = 'ctx-' + Date.now();
+            html += `<div class="msg-context-toggle" onclick="document.getElementById('${toggleId}').style.display=document.getElementById('${toggleId}').style.display==='block'?'none':'block'">📖 Show retrieved context (${chunks.length} passages)</div>`;
+            html += `<div id="${toggleId}" class="msg-context">`;
+            chunks.forEach((c, i) => {
+                html += `<div class="msg-context-item"><strong>[${i+1}]</strong> ${escapeHtml(c.source)} <span class="score">score: ${c.score}</span><br>${escapeHtml(truncate(c.chunk, 300))}</div>`;
+            });
+            html += `</div>`;
+        }
+
+        div.innerHTML = html;
+        chatMessages.appendChild(div);
+        scrollBottom();
+        return div;
+    }
+
+    function addSystemMessage(text) {
+        emptyChat.style.display = 'none';
+        const div = document.createElement('div');
+        div.className = 'msg msg-system';
+        div.innerHTML = `<div class="msg-content">${renderMarkdown(text)}</div>`;
+        chatMessages.appendChild(div);
+        scrollBottom();
+        return div;
+    }
+
+    let typingCount = 0;
+
+    function showTyping() {
+        emptyChat.style.display = 'none';
+        const id = 'typing-' + (++typingCount);
+        const div = document.createElement('div');
+        div.className = 'msg msg-assistant';
+        div.id = id;
+        div.innerHTML = '<div class="typing"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>';
+        chatMessages.appendChild(div);
+        scrollBottom();
+        return id;
+    }
+
+    function hideTyping(id) {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+    }
+
+    function scrollBottom() {
+        requestAnimationFrame(() => {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        });
+    }
+
+    // ── Chat History (localStorage) ─────────────────────────
+
+    function loadChatHistory() {
+        try {
+            const stored = localStorage.getItem('study_chat_history');
+            return stored ? JSON.parse(stored) : [];
+        } catch { return []; }
+    }
+
+    function saveChatHistory() {
+        try {
+            localStorage.setItem('study_chat_history', JSON.stringify(chatHistory.slice(-50)));
+        } catch {}
+    }
+
+    function renderChatHistory() {
+        if (!chatHistory.length) return;
+        for (const h of chatHistory) {
+            addUserMessage(h.question);
+            addAssistantMessage(h.answer, null, null, false);
+        }
+    }
+
+    // ── Markdown Renderer ───────────────────────────────────
+
+    function renderMarkdown(text) {
+        if (!text) return '';
+        let html = escapeHtml(text);
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+        html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+        html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+        html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+        html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+        html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+        html = html.replace(/\n\n/g, '</p><p>');
+        html = '<p>' + html + '</p>';
+        html = html.replace(/<\/p><p>/g, '</p>\n<p>');
+        html = html.replace(/<li>/g, '</p><li>');
+        html = html.replace(/<\/li>/g, '</li><p>');
+        html = html.replace(/<\/p><ul><p>/g, '<ul>');
+        html = html.replace(/<\/p><\/ul>/g, '</ul>');
+        html = html.replace(/<p><\/p>/g, '');
+        html = html.replace(/<\/ul>\n<p>/g, '</ul>');
+        html = html.replace(/<\/ul><p>/g, '</ul>');
+        html = html.replace(/<p><li>/g, '<li>');
+        html = html.replace(/<\/li><p>/g, '</li>');
+        return html;
+    }
+
+    function truncate(text, max) {
+        if (text.length <= max) return text;
+        return text.slice(0, max) + '...';
+    }
+
+    function escapeHtml(str) {
+        const d = document.createElement('div');
+        d.textContent = str;
+        return d.innerHTML;
+    }
+
+    // ── Context toggle (global) ─────────────────────────────
+
+    window.toggleContext = function(id) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block';
+    };
+})();
+</script>
+{% endblock %}

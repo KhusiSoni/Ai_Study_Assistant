@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+uploads/*.txt
+uploads/*.pdf
+uploads/*.docx
+*.log
