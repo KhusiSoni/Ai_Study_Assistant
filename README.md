@@ -8,9 +8,16 @@ Created by **Khushi**
 
 ## RAG Architecture
 
-<p align="center">
-  <img src="screenshots/architecture.svg" alt="RAG Architecture Diagram" width="800">
-</p>
+Here's how a question actually gets answered, in plain terms:
+
+1. **Upload** — You upload a PDF, DOCX, or TXT file. The app extracts the raw text.
+2. **Chunking** — The text is split into paragraph-aware chunks of roughly 500–800 characters each, instead of blindly cutting every N characters, so ideas aren't sliced in half.
+3. **Indexing** — Each chunk is converted into a TF-IDF vector (a numerical representation of which words matter most in that chunk) and stored in an in-memory index for the session.
+4. **Retrieval** — When you ask a question, it's also converted into a TF-IDF vector, then compared against every chunk using cosine similarity, with a keyword-overlap boost mixed in (70% similarity score + 30% keyword overlap). The top-matching chunks are pulled out as "context."
+5. **Answer generation** — Those retrieved chunks are handed to the answer step. If an `OPENAI_API_KEY` is set, GPT-4o-mini writes an answer grounded in that context with inline citations like `[1]`, `[2]`. Without a key, the app just returns the most relevant excerpts directly.
+6. **Memory** — The last 6 question/answer pairs are kept as conversation context, so follow-up questions still make sense.
+
+In short: it's not the model "remembering" your notes — every answer is built fresh from the specific chunks retrieved for that question, which is what makes it a RAG (Retrieval-Augmented Generation) system rather than a plain chatbot.
 
 ## What This Shows
 
@@ -92,8 +99,6 @@ Without the API key, the app returns the most relevant excerpts from your docume
 │   └── style.css        # Dark theme UI
 ├── templates/
 │   └── index.html       # Document manager + chat interface
-├── screenshots/
-│   └── architecture.svg  # RAG architecture diagram
 └── uploads/             # Uploaded files (gitignored)
 ```
 
